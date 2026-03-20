@@ -125,18 +125,22 @@ impl FileSystemContext for WinExtContext {
         context: &Self::FileContext,
         pattern: Option<&U16CStr>,
         marker: DirMarker<'_>,
-        buffer: &mut [u8],
+        mut buffer: &mut [u8],
     ) -> Result<u32> {
         eprintln!("read_directory");
 
         let mut directory: DirInfo<0> = DirInfo::new();
 
-        let dirbuf = DirBuffer::new();
-        dirbuf
-            .acquire(false, None)
+        let buf = DirBuffer::new();
+        buf.acquire(false, None)
             .unwrap()
             .write(&mut directory)
             .unwrap();
+
+        let mut out: &mut [u8] = &mut [];
+        buf.read(marker, &mut out);
+
+        buffer.write(out).unwrap();
 
         Ok(0)
     }
