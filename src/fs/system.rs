@@ -15,14 +15,12 @@ use winfsp::{
 use crate::fs::file::WinExtFile;
 
 pub struct WinExtFs {
-    host: Arc<Mutex<FileSystemHost<WinExtContext>>>,
+    host: FileSystemHost<WinExtContext>,
 }
 
 impl WinExtFs {
     pub fn new(context: FileSystemHost<WinExtContext>) -> Self {
-        WinExtFs {
-            host: Arc::new(Mutex::new(context)),
-        }
+        WinExtFs { host: context }
     }
 }
 
