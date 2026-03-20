@@ -1,15 +1,18 @@
-use ext4_lwext4::{BlockDevice, BlockDeviceExt, Ext4Fs, FileBlockDevice, OpenFlags};
-use log::debug;
+use ext4_lwext4::{Ext4Fs, FileBlockDevice, OpenFlags};
+use log::{debug, info};
 use std::{
-    io::{Write, stderr},
-    sync::{Arc, Mutex},
+    ffi::c_void,
+    marker::PhantomData,
     time::{SystemTime, UNIX_EPOCH},
 };
+use windows::Win32::Storage::FileSystem::{
+    FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
+};
 use winfsp::{
-    Result, U16CStr,
+    FspError, Result, U16CStr,
     filesystem::{
-        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, VolumeInfo,
-        WideNameInfo,
+        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo,
+        VolumeInfo, WideNameInfo,
     },
     host::{FileSystemHost, VolumeParams},
 };
@@ -56,8 +59,8 @@ impl FileSystemContext for WinExtContext {
     fn get_security_by_name(
         &self,
         file_name: &U16CStr,
-        _security_descriptor: Option<&mut [std::ffi::c_void]>,
-        _reparse_point_resolver: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
+        security_descriptor: Option<&mut [std::ffi::c_void]>,
+        reparse_point_resolver: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
     ) -> Result<FileSecurity> {
         debug!("get_security_by_name: {:?}", file_name);
 
@@ -71,28 +74,69 @@ impl FileSystemContext for WinExtContext {
     fn open(
         &self,
         file_name: &U16CStr,
-        _create_options: u32,
-        _granted_access: u32,
+        create_options: u32,
+        granted_access: u32,
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> Result<Self::FileContext> {
         debug!("open: {:?}", file_name);
 
-        let file = self
-            .fs
-            .open(&file_name.to_string_lossy(), OpenFlags::all())
-            .unwrap();
+        let path = file_name
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('\0')
+            .to_string();
 
-        Result::Ok(WinExtFile {})
+        let flags = OpenFlags::all();
+        let meta = self.fs.metadata(&path).unwrap();
+
+        let file_type = match meta.file_type {
+            ext4_lwext4::FileType::RegularFile => FILE_ATTRIBUTE_NORMAL,
+            ext4_lwext4::FileType::Directory => FILE_ATTRIBUTE_DIRECTORY,
+            t => panic!("{:?} support is todo", t),
+        }
+        .0;
+
+        info!("type: {:?}", file_type);
+
+        let info = file_info.as_mut();
+        info.file_attributes = file_type;
+        info.reparse_tag = 0;
+        info.file_size = 0;
+        info.allocation_size = 0;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let windows_time = (now + 11644473600) * 10000000;
+
+        info.creation_time = windows_time;
+        info.last_access_time = windows_time;
+        info.last_write_time = windows_time;
+        info.change_time = windows_time;
+
+        Ok(WinExtFile::new(&path, flags))
     }
 
     fn close(&self, _context: Self::FileContext) {
         debug!("close");
     }
 
-    fn get_file_info(&self, _context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
+    fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
         debug!("get_file_info");
 
-        file_info.file_attributes = 0x10;
+        let meta = self.fs.metadata(&context.path).unwrap();
+
+        let file_type = match meta.file_type {
+            ext4_lwext4::FileType::RegularFile => FILE_ATTRIBUTE_NORMAL,
+            ext4_lwext4::FileType::Directory => FILE_ATTRIBUTE_DIRECTORY,
+            t => panic!("{:?} support is todo", t),
+        }
+        .0;
+
+        info!("type: {:?}", file_type);
+
+        file_info.file_attributes = file_type;
         file_info.reparse_tag = 0;
         file_info.file_size = 0;
         file_info.allocation_size = 0;
@@ -131,17 +175,6 @@ impl FileSystemContext for WinExtContext {
     ) -> Result<u32> {
         debug!("read_directory");
 
-        let mut directory: DirInfo<1> = DirInfo::new();
-
-        let buf = DirBuffer::new();
-        buf.acquire(false, None)
-            .unwrap()
-            .write(&mut directory)
-            .unwrap();
-
-        let mut bytes_transferred: u32 = 0;
-        directory.append_to_buffer(buffer, &mut bytes_transferred);
-
-        Ok(bytes_transferred)
+        Ok(0)
     }
 }
