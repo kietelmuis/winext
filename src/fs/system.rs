@@ -113,9 +113,8 @@ impl FileSystemContext for WinExtContext {
         eprintln!("get_volume_info");
 
         let stats = self.fs.stat().unwrap();
-        let block_size = stats.block_size as u64;
-        out_volume_info.total_size = stats.total_blocks * block_size;
-        out_volume_info.free_size = stats.free_blocks * block_size;
+        out_volume_info.total_size = stats.total_size();
+        out_volume_info.free_size = stats.free_size();
         out_volume_info.set_volume_label(&stats.volume_name);
 
         Ok(())
