@@ -757,7 +757,6 @@ dependencies = [
  "env_logger",
  "ext4-lwext4",
  "ext4-lwext4-sys",
- "libc",
  "log",
  "windows 0.62.2",
  "winfsp",
