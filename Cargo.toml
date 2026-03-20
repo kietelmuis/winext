@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+crc32-v2 = "0.0.5"
+ext4-lwext4 = { version = "0.1.2", features = ["gpl"]}
 winfsp = { version = "0.12.4", features = ["debug", "system", "full", "windows-62", "handle-util"] }
 
 [build-dependencies]

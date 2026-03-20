@@ -1,1 +1,1 @@
-pub struct GoonFile;
+pub struct WinExtFile;

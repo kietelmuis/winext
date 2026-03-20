@@ -1,31 +1,44 @@
+use ext4_lwext4::{BlockDevice, BlockDeviceExt, Ext4Fs, FileBlockDevice, OpenFlags};
 use std::{
+    io::{Write, stderr},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 use winfsp::{
     Result, U16CStr,
-    filesystem::{DirMarker, FileInfo, FileSecurity, FileSystemContext, VolumeInfo},
+    filesystem::{
+        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, VolumeInfo,
+    },
     host::FileSystemHost,
 };
 
-use crate::fs::file::GoonFile;
+use crate::fs::file::WinExtFile;
 
-pub struct GoonFs {
-    host: Arc<Mutex<FileSystemHost<GoonContext>>>,
+pub struct WinExtFs {
+    host: Arc<Mutex<FileSystemHost<WinExtContext>>>,
 }
 
-pub struct GoonContext;
-
-impl GoonFs {
-    pub fn new(context: FileSystemHost<GoonContext>) -> Self {
-        GoonFs {
+impl WinExtFs {
+    pub fn new(context: FileSystemHost<WinExtContext>) -> Self {
+        WinExtFs {
             host: Arc::new(Mutex::new(context)),
         }
     }
 }
 
-impl FileSystemContext for GoonContext {
-    type FileContext = GoonFile;
+pub struct WinExtContext {
+    pub fs: Ext4Fs,
+}
+
+impl WinExtContext {
+    pub fn new(device: FileBlockDevice) -> Self {
+        let fs = Ext4Fs::mount(device, false).unwrap();
+        WinExtContext { fs }
+    }
+}
+
+impl FileSystemContext for WinExtContext {
+    type FileContext = WinExtFile;
 
     fn get_security_by_name(
         &self,
@@ -50,8 +63,14 @@ impl FileSystemContext for GoonContext {
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> Result<Self::FileContext> {
         eprintln!("open: {:?}", file_name);
+        Write::flush(&mut stderr()).ok();
 
-        Result::Ok(GoonFile {})
+        let file = self
+            .fs
+            .open(&file_name.to_string_lossy(), OpenFlags::all())
+            .unwrap();
+
+        Result::Ok(WinExtFile {})
     }
 
     fn close(&self, _context: Self::FileContext) {
@@ -60,6 +79,7 @@ impl FileSystemContext for GoonContext {
 
     fn get_file_info(&self, _context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
         eprintln!("get_file_info");
+        Write::flush(&mut stderr()).ok();
 
         file_info.file_attributes = 0x10;
         file_info.reparse_tag = 0;
@@ -83,20 +103,27 @@ impl FileSystemContext for GoonContext {
     fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> Result<()> {
         eprintln!("get_volume_info");
 
-        out_volume_info.total_size = 10 * 1024 * 1024 * 1024;
-        out_volume_info.free_size = 5 * 1024 * 1024 * 1024;
+        let stats = self.fs.stat().unwrap();
+        let block_size = stats.block_size as u64;
+        out_volume_info.total_size = stats.total_blocks * block_size;
+        out_volume_info.free_size = stats.free_blocks * block_size;
+        out_volume_info.set_volume_label(&stats.volume_name);
 
         Ok(())
     }
 
     fn read_directory(
         &self,
-        _context: &Self::FileContext,
-        _pattern: Option<&U16CStr>,
-        _marker: DirMarker<'_>,
-        _buffer: &mut [u8],
+        context: &Self::FileContext,
+        pattern: Option<&U16CStr>,
+        marker: DirMarker<'_>,
+        buffer: &mut [u8],
     ) -> Result<u32> {
         eprintln!("read_directory");
+
+        let dirbuf = DirBuffer::new();
+        dirbuf.acquire(false, None).unwrap().write(&mut directory);
+
         Ok(0)
     }
 }
