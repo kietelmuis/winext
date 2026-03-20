@@ -1,18 +1,15 @@
 use ext4_lwext4::{Ext4Fs, FileBlockDevice, OpenFlags};
 use log::{debug, info};
 use std::{
-    ffi::c_void,
     marker::PhantomData,
     time::{SystemTime, UNIX_EPOCH},
 };
-use windows::Win32::Storage::FileSystem::{
-    FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
-};
+use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
 use winfsp::{
     FspError, Result, U16CStr,
     filesystem::{
-        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo,
-        VolumeInfo, WideNameInfo,
+        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, VolumeInfo,
+        WideNameInfo,
     },
     host::{FileSystemHost, VolumeParams},
 };
@@ -175,6 +172,59 @@ impl FileSystemContext for WinExtContext {
     ) -> Result<u32> {
         debug!("read_directory");
 
-        Ok(0)
+        let dir = context.path.clone();
+        debug!("doing dir {}", dir);
+
+        let directories = self.fs.open_dir(&dir).unwrap();
+        let mut bytes_transferred: u32 = 0;
+
+        let mut marker_passed = marker.is_none();
+        let marker_name = match marker.inner_as_cstr() {
+            Some(m) => Some(m.to_string_lossy()),
+            None => None,
+        };
+
+        for dir in directories {
+            let extinfo = dir.unwrap();
+            let name = extinfo.name().to_string();
+
+            debug!("doing dir {}", name);
+
+            if !marker_passed {
+                if marker_name == Some(name) {
+                    marker_passed = true;
+                }
+                continue;
+            }
+
+            let mut dirinfo: DirInfo<255> = DirInfo::new();
+            if dirinfo.set_name(name.clone()).is_err() {
+                debug!("we were too stupid for dir {}", name);
+                continue;
+            }
+
+            let fileinfo = dirinfo.file_info_mut();
+            let attributes = match extinfo.file_type() {
+                ext4_lwext4::FileType::RegularFile => FILE_ATTRIBUTE_NORMAL,
+                ext4_lwext4::FileType::Directory => FILE_ATTRIBUTE_DIRECTORY,
+                t => panic!("how to handle type {:?} idk", t),
+            }
+            .0;
+            debug!("dir {} has attributes {:x}", name, attributes);
+
+            fileinfo.file_attributes = attributes;
+
+            let buf = DirBuffer::new();
+            buf.acquire(true, None)
+                .unwrap()
+                .write(&mut dirinfo)
+                .unwrap();
+
+            dirinfo.append_to_buffer(buffer, &mut bytes_transferred);
+            debug!("appended dir {}", name);
+        }
+
+        debug!("appended {} bytes", bytes_transferred);
+        Ok(bytes_transferred)
     }
 }
