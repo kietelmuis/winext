@@ -1,15 +1,17 @@
 use ext4_lwext4::{Ext4Fs, FileBlockDevice, OpenFlags};
 use log::{debug, info};
 use std::{
-    marker::PhantomData,
+    ffi::c_void,
     time::{SystemTime, UNIX_EPOCH},
 };
-use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
+use windows::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
+};
 use winfsp::{
-    FspError, Result, U16CStr,
+    Result, U16CStr,
     filesystem::{
-        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, VolumeInfo,
-        WideNameInfo,
+        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo,
+        VolumeInfo, WideNameInfo,
     },
     host::{FileSystemHost, VolumeParams},
 };
@@ -65,6 +67,24 @@ impl FileSystemContext for WinExtContext {
             reparse: false,
             sz_security_descriptor: 0,
             attributes: 0x10,
+        })
+    }
+
+    fn create(
+        &self,
+        file_name: &U16CStr,
+        create_options: u32,
+        granted_access: u32,
+        file_attributes: u32,
+        security_descriptor: Option<&[c_void]>,
+        allocation_size: u64,
+        extra_buffer: Option<&[u8]>,
+        extra_buffer_is_reparse_point: bool,
+        file_info: &mut OpenFileInfo,
+    ) -> Result<Self::FileContext> {
+        Ok(WinExtFile {
+            path: file_name.to_string_lossy(),
+            flags: OpenFlags::all(),
         })
     }
 
