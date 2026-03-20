@@ -9,18 +9,31 @@ use winfsp::{
     filesystem::{
         DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, VolumeInfo,
     },
-    host::FileSystemHost,
+    host::{FileSystemHost, VolumeParams},
 };
 
 use crate::fs::file::WinExtFile;
 
 pub struct WinExtFs {
-    host: FileSystemHost<WinExtContext>,
+    pub host: FileSystemHost<WinExtContext>,
 }
 
 impl WinExtFs {
-    pub fn new(context: FileSystemHost<WinExtContext>) -> Self {
-        WinExtFs { host: context }
+    pub fn new(context: WinExtContext, serial_number: u32) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let windows_filetime = (now + 11644473600) * 10000000;
+
+        let mut volume_params = VolumeParams::new();
+        volume_params.filesystem_name("ext4");
+        volume_params.volume_creation_time(windows_filetime);
+        volume_params.volume_serial_number(serial_number);
+
+        WinExtFs {
+            host: FileSystemHost::new(volume_params, context).expect("failed to create filesystem"),
+        }
     }
 }
 
@@ -61,7 +74,6 @@ impl FileSystemContext for WinExtContext {
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> Result<Self::FileContext> {
         eprintln!("open: {:?}", file_name);
-        Write::flush(&mut stderr()).ok();
 
         let file = self
             .fs
@@ -77,7 +89,6 @@ impl FileSystemContext for WinExtContext {
 
     fn get_file_info(&self, _context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
         eprintln!("get_file_info");
-        Write::flush(&mut stderr()).ok();
 
         file_info.file_attributes = 0x10;
         file_info.reparse_tag = 0;
@@ -119,8 +130,14 @@ impl FileSystemContext for WinExtContext {
     ) -> Result<u32> {
         eprintln!("read_directory");
 
+        let mut directory: DirInfo<0> = DirInfo::new();
+
         let dirbuf = DirBuffer::new();
-        dirbuf.acquire(false, None).unwrap().write(&mut directory);
+        dirbuf
+            .acquire(false, None)
+            .unwrap()
+            .write(&mut directory)
+            .unwrap();
 
         Ok(0)
     }
