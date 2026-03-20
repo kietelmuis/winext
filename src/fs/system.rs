@@ -1,4 +1,5 @@
 use ext4_lwext4::{BlockDevice, BlockDeviceExt, Ext4Fs, FileBlockDevice, OpenFlags};
+use log::debug;
 use std::{
     io::{Write, stderr},
     sync::{Arc, Mutex},
@@ -8,6 +9,7 @@ use winfsp::{
     Result, U16CStr,
     filesystem::{
         DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, VolumeInfo,
+        WideNameInfo,
     },
     host::{FileSystemHost, VolumeParams},
 };
@@ -57,7 +59,7 @@ impl FileSystemContext for WinExtContext {
         _security_descriptor: Option<&mut [std::ffi::c_void]>,
         _reparse_point_resolver: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
     ) -> Result<FileSecurity> {
-        eprintln!("get_security_by_name: {:?}", file_name);
+        debug!("get_security_by_name: {:?}", file_name);
 
         Result::Ok(FileSecurity {
             reparse: false,
@@ -73,7 +75,7 @@ impl FileSystemContext for WinExtContext {
         _granted_access: u32,
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> Result<Self::FileContext> {
-        eprintln!("open: {:?}", file_name);
+        debug!("open: {:?}", file_name);
 
         let file = self
             .fs
@@ -84,11 +86,11 @@ impl FileSystemContext for WinExtContext {
     }
 
     fn close(&self, _context: Self::FileContext) {
-        eprintln!("close");
+        debug!("close");
     }
 
     fn get_file_info(&self, _context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
-        eprintln!("get_file_info");
+        debug!("get_file_info");
 
         file_info.file_attributes = 0x10;
         file_info.reparse_tag = 0;
@@ -110,7 +112,7 @@ impl FileSystemContext for WinExtContext {
     }
 
     fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> Result<()> {
-        eprintln!("get_volume_info");
+        debug!("get_volume_info");
 
         let stats = self.fs.stat().unwrap();
         out_volume_info.total_size = stats.total_size();
@@ -125,11 +127,11 @@ impl FileSystemContext for WinExtContext {
         context: &Self::FileContext,
         pattern: Option<&U16CStr>,
         marker: DirMarker<'_>,
-        mut buffer: &mut [u8],
+        buffer: &mut [u8],
     ) -> Result<u32> {
-        eprintln!("read_directory");
+        debug!("read_directory");
 
-        let mut directory: DirInfo<0> = DirInfo::new();
+        let mut directory: DirInfo<1> = DirInfo::new();
 
         let buf = DirBuffer::new();
         buf.acquire(false, None)
@@ -137,11 +139,9 @@ impl FileSystemContext for WinExtContext {
             .write(&mut directory)
             .unwrap();
 
-        let mut out: &mut [u8] = &mut [];
-        buf.read(marker, &mut out);
+        let mut bytes_transferred: u32 = 0;
+        directory.append_to_buffer(buffer, &mut bytes_transferred);
 
-        buffer.write(out).unwrap();
-
-        Ok(0)
+        Ok(bytes_transferred)
     }
 }

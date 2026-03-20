@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 crc32-v2 = "0.0.5"
+env_logger = "0.11.9"
 ext4-lwext4 = { version = "0.1.2", features = ["gpl"]}
+log = "0.4.29"
 winfsp = { version = "0.12.4", features = ["debug", "system", "full", "windows-62", "handle-util"] }
 
 [build-dependencies]
