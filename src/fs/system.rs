@@ -1,12 +1,10 @@
-use ext4_lwext4::{Ext4Fs, FileBlockDevice, OpenFlags};
+use ext4_lwext4::{Ext4Fs, OpenFlags};
 use log::{debug, info};
 use std::{
     ffi::c_void,
     time::{SystemTime, UNIX_EPOCH},
 };
-use windows::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
-};
+use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
 use winfsp::{
     Result, U16CStr,
     filesystem::{
@@ -16,7 +14,7 @@ use winfsp::{
     host::{FileSystemHost, VolumeParams},
 };
 
-use crate::fs::file::WinExtFile;
+use crate::{disk::DriveBlockDevice, fs::file::WinExtFile};
 
 pub struct WinExtFs {
     pub host: FileSystemHost<WinExtContext>,
@@ -46,7 +44,7 @@ pub struct WinExtContext {
 }
 
 impl WinExtContext {
-    pub fn new(device: FileBlockDevice) -> Self {
+    pub fn new(device: DriveBlockDevice) -> Self {
         let fs = Ext4Fs::mount(device, false).unwrap();
         WinExtContext { fs }
     }

@@ -9,7 +9,12 @@ env_logger = "0.11.9"
 ext4-lwext4 = { version = "0.1.2", features = ["gpl"]}
 ext4-lwext4-sys = "0.1.2"
 log = "0.4.29"
-windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Ioctl"
+] }
 winfsp = { version = "0.12.4", features = ["debug", "system", "full", "windows-62", "handle-util"] }
 
 [build-dependencies]
