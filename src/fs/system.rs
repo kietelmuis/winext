@@ -1,27 +1,28 @@
-use ext4_lwext4::{Ext4Fs, OpenFlags};
+use ext4_rs::{BlockDevice, Ext4, InodeFileType};
 use log::{debug, info};
 use std::{
     ffi::c_void,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
 use winfsp::{
     Result, U16CStr,
     filesystem::{
-        DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo,
-        VolumeInfo, WideNameInfo,
+        DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo, VolumeInfo,
+        WideNameInfo,
     },
     host::{FileSystemHost, VolumeParams},
 };
 
-use crate::{disk::DriveBlockDevice, fs::file::WinExtFile};
+use crate::fs::file::WinExtFile;
 
 pub struct WinExtFs {
     pub host: FileSystemHost<WinExtContext>,
 }
 
 impl WinExtFs {
-    pub fn new(context: WinExtContext, serial_number: u32) -> Self {
+    pub fn new(context: WinExtContext) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -29,9 +30,13 @@ impl WinExtFs {
         let windows_filetime = (now + 11644473600) * 10000000;
 
         let mut volume_params = VolumeParams::new();
+        volume_params.sector_size(512);
+        volume_params.sectors_per_allocation_unit(8);
+        volume_params.max_component_length(255);
         volume_params.filesystem_name("ext4");
         volume_params.volume_creation_time(windows_filetime);
-        volume_params.volume_serial_number(serial_number);
+        volume_params.volume_serial_number(0x6f910e5b);
+        volume_params.read_only_volume(true);
 
         WinExtFs {
             host: FileSystemHost::new(volume_params, context).expect("failed to create filesystem"),
@@ -40,12 +45,14 @@ impl WinExtFs {
 }
 
 pub struct WinExtContext {
-    pub fs: Ext4Fs,
+    pub fs: Ext4,
 }
 
 impl WinExtContext {
-    pub fn new(device: DriveBlockDevice) -> Self {
-        let fs = Ext4Fs::mount(device, false).unwrap();
+    pub fn new(device: Arc<dyn BlockDevice + 'static>) -> Self {
+        info!("WinExtContext::new: About to call Ext4::open");
+        let fs = ext4_rs::Ext4::open(device);
+        info!("WinExtContext::new: Ext4::open completed successfully");
         WinExtContext { fs }
     }
 }
@@ -64,7 +71,7 @@ impl FileSystemContext for WinExtContext {
         Result::Ok(FileSecurity {
             reparse: false,
             sz_security_descriptor: 0,
-            attributes: 0x10,
+            attributes: FILE_ATTRIBUTE_DIRECTORY.0,
         })
     }
 
@@ -80,10 +87,7 @@ impl FileSystemContext for WinExtContext {
         extra_buffer_is_reparse_point: bool,
         file_info: &mut OpenFileInfo,
     ) -> Result<Self::FileContext> {
-        Ok(WinExtFile {
-            path: file_name.to_string_lossy(),
-            flags: OpenFlags::all(),
-        })
+        Ok(WinExtFile(file_name.to_string_lossy()))
     }
 
     fn open(
@@ -100,13 +104,20 @@ impl FileSystemContext for WinExtContext {
             .replace('\\', "/")
             .trim_end_matches('\0')
             .to_string();
+        debug!("path: {}", path);
 
-        let flags = OpenFlags::all();
-        let meta = self.fs.metadata(&path).unwrap();
+        let inode = self
+            .fs
+            .generic_open(&path, &mut 2, false, InodeFileType::all().bits(), &mut 0)
+            .unwrap();
 
-        let file_type = match meta.file_type {
-            ext4_lwext4::FileType::RegularFile => FILE_ATTRIBUTE_NORMAL,
-            ext4_lwext4::FileType::Directory => FILE_ATTRIBUTE_DIRECTORY,
+        debug!("inode: {:?}", inode);
+
+        let inoderef = self.fs.get_inode_ref(inode);
+
+        let file_type = match inoderef.inode.file_type() {
+            InodeFileType::S_IFREG => FILE_ATTRIBUTE_NORMAL,
+            InodeFileType::S_IFDIR => FILE_ATTRIBUTE_DIRECTORY,
             t => panic!("{:?} support is todo", t),
         }
         .0;
@@ -130,7 +141,7 @@ impl FileSystemContext for WinExtContext {
         info.last_write_time = windows_time;
         info.change_time = windows_time;
 
-        Ok(WinExtFile::new(&path, flags))
+        Ok(WinExtFile(path))
     }
 
     fn close(&self, _context: Self::FileContext) {
@@ -140,11 +151,12 @@ impl FileSystemContext for WinExtContext {
     fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
         debug!("get_file_info");
 
-        let meta = self.fs.metadata(&context.path).unwrap();
+        let inode = self.fs.ext4_file_open(&context.0, "r").unwrap();
+        let inoderef = self.fs.get_inode_ref(inode);
 
-        let file_type = match meta.file_type {
-            ext4_lwext4::FileType::RegularFile => FILE_ATTRIBUTE_NORMAL,
-            ext4_lwext4::FileType::Directory => FILE_ATTRIBUTE_DIRECTORY,
+        let file_type = match inoderef.inode.file_type() {
+            InodeFileType::S_IFREG => FILE_ATTRIBUTE_NORMAL,
+            InodeFileType::S_IFDIR => FILE_ATTRIBUTE_DIRECTORY,
             t => panic!("{:?} support is todo", t),
         }
         .0;
@@ -173,10 +185,13 @@ impl FileSystemContext for WinExtContext {
     fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> Result<()> {
         debug!("get_volume_info");
 
-        let stats = self.fs.stat().unwrap();
-        out_volume_info.total_size = stats.total_size();
-        out_volume_info.free_size = stats.free_size();
-        out_volume_info.set_volume_label(&stats.volume_name);
+        let free_blocks = self.fs.super_block.free_blocks_count();
+        let total_blocks = self.fs.super_block.blocks_count() as u64;
+        let block_size = self.fs.super_block.block_size() as u64;
+
+        out_volume_info.total_size = total_blocks * block_size;
+        out_volume_info.free_size = free_blocks * block_size;
+        out_volume_info.set_volume_label("ext4");
 
         Ok(())
     }
@@ -190,10 +205,11 @@ impl FileSystemContext for WinExtContext {
     ) -> Result<u32> {
         debug!("read_directory");
 
-        let dir = context.path.clone();
+        let dir = context.0.clone();
         debug!("doing dir {}", dir);
 
-        let directories = self.fs.open_dir(&dir).unwrap();
+        let inode = self.fs.ext4_file_open(&dir, "r").unwrap();
+        let directories = self.fs.dir_get_entries(inode);
         let mut bytes_transferred: u32 = 0;
 
         let mut marker_passed = marker.is_none();
@@ -203,9 +219,7 @@ impl FileSystemContext for WinExtContext {
         };
 
         for dir in directories {
-            let extinfo = dir.unwrap();
-            let name = extinfo.name().to_string();
-
+            let name = dir.get_name();
             debug!("doing dir {}", name);
 
             if !marker_passed {
@@ -222,21 +236,15 @@ impl FileSystemContext for WinExtContext {
             }
 
             let fileinfo = dirinfo.file_info_mut();
-            let attributes = match extinfo.file_type() {
-                ext4_lwext4::FileType::RegularFile => FILE_ATTRIBUTE_NORMAL,
-                ext4_lwext4::FileType::Directory => FILE_ATTRIBUTE_DIRECTORY,
+            let attributes = match dir.get_de_type() {
+                1 => FILE_ATTRIBUTE_NORMAL,
+                2 => FILE_ATTRIBUTE_DIRECTORY,
                 t => panic!("how to handle type {:?} idk", t),
             }
             .0;
             debug!("dir {} has attributes {:x}", name, attributes);
 
             fileinfo.file_attributes = attributes;
-
-            let buf = DirBuffer::new();
-            buf.acquire(true, None)
-                .unwrap()
-                .write(&mut dirinfo)
-                .unwrap();
 
             dirinfo.append_to_buffer(buffer, &mut bytes_transferred);
             debug!("appended dir {}", name);

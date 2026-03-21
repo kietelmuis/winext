@@ -6,8 +6,7 @@ edition = "2024"
 [dependencies]
 crc32-v2 = "0.0.5"
 env_logger = "0.11.9"
-ext4-lwext4 = { version = "0.1.2", features = ["gpl"]}
-ext4-lwext4-sys = "0.1.2"
+ext4_rs = "1.3.3"
 log = "0.4.29"
 windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
@@ -19,3 +18,6 @@ winfsp = { version = "0.12.4", features = ["debug", "system", "full", "windows-6
 
 [build-dependencies]
 winfsp = "0.12.4"
+
+[patch.crates-io]
+ext4_rs = { path = "patches/ext4_rs" }
