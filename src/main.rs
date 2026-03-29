@@ -24,7 +24,7 @@ fn main() {
 
     info!("initializing");
 
-    let device = match DriveBlockDevice::open("\\\\.\\Harddisk0Partition2") {
+    let device = match DriveBlockDevice::open("C:\\Users\\omar\\test.img") {
         Ok(dev) => Arc::new(dev),
         Err(e) => {
             error!("failed to open device: {:?}", e);
