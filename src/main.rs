@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use log::{error, info};
 
@@ -15,6 +18,9 @@ fn main() {
     env_logger::Builder::new()
         .filter_module("winext", log::LevelFilter::Debug)
         .init();
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
 
     info!("initializing");
 
@@ -40,6 +46,14 @@ fn main() {
         Err(e) => error!("start failed: {:?}", e),
     }
 
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
+    ctrlc::set_handler(move || {
+        info!("shutting down...");
+        host.host.unmount();
+        host.host.stop();
+
+        r.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
+
+    while running.load(Ordering::SeqCst) {}
 }
