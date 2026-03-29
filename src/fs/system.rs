@@ -167,6 +167,7 @@ impl FileSystemContext for WinExtContext {
             .unwrap()
             .to_str()
             .unwrap();
+        debug!("parent path: {}", parent_path);
 
         let mut parent_inode = match self.fs.ext4_dir_open(parent_path) {
             Ok(i) => Ok(i),
@@ -227,12 +228,12 @@ impl FileSystemContext for WinExtContext {
     }
 
     fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
-        debug!("get_file_info: {}", context.file);
+        debug!("file info: {}", context.file);
 
         let inode = self.fs.get_inode_ref(context.inode as u32);
         let file_type = inode_type_to_windows(inode.inode.file_type());
 
-        info!("type: {:?}", file_type);
+        info!("file info type: {:?}", file_type);
 
         file_info.file_attributes = file_type.0;
         file_info.reparse_tag = 0;
@@ -259,7 +260,7 @@ impl FileSystemContext for WinExtContext {
 
         out_volume_info.total_size = total_blocks * block_size;
         out_volume_info.free_size = free_blocks * block_size;
-        out_volume_info.set_volume_label("ext4");
+        out_volume_info.set_volume_label("NTFS");
 
         Ok(())
     }
