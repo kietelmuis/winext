@@ -3,7 +3,6 @@ use log::{debug, error, info};
 use std::{
     ffi::c_void,
     io::ErrorKind,
-    path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,8 +16,8 @@ use winfsp::{
     host::{FileSystemHost, VolumeParams},
 };
 
-use crate::fs::file::WinExtFile;
 use crate::util::{inode::inode_type_to_windows, u16cstr::U16CStrExt, u32::U32Ext};
+use crate::{fs::file::WinExtFile, util::inode::windows_to_inode_type};
 
 pub struct WinExtFs {
     pub host: FileSystemHost<WinExtContext>,
@@ -73,10 +72,20 @@ impl FileSystemContext for WinExtContext {
     ) -> Result<FileSecurity> {
         debug!("get_security_by_name: {:?}", file_name);
 
+        let path = file_name.sanitize();
+
+        let inode_num = self
+            .fs
+            .ext4_file_open(&path, "r")
+            .map_err(|_| FspError::IO(ErrorKind::NotFound))?;
+
+        let inode = self.fs.get_inode_ref(inode_num);
+        let file_type = inode_type_to_windows(inode.inode.file_type());
+
         Result::Ok(FileSecurity {
             reparse: false,
             sz_security_descriptor: 0,
-            attributes: FILE_ATTRIBUTE_DIRECTORY.0,
+            attributes: file_type.0,
         })
     }
 
@@ -85,7 +94,7 @@ impl FileSystemContext for WinExtContext {
         file_name: &U16CStr,
         _create_options: u32,
         _granted_access: u32,
-        _file_attributes: u32,
+        file_attributes: u32,
         _security_descriptor: Option<&[c_void]>,
         _allocation_size: u64,
         _extra_buffer: Option<&[u8]>,
@@ -93,22 +102,31 @@ impl FileSystemContext for WinExtContext {
         _file_info: &mut OpenFileInfo,
     ) -> Result<Self::FileContext> {
         debug!("create: {:?}", file_name);
+        debug!(
+            "opt: {}, access: {}, attrs: {}",
+            _create_options, _granted_access, file_attributes
+        );
 
         let path = file_name.sanitize();
         debug!("create path: {}", path);
 
-        let inode_num = match self.fs.ext4_file_open(&path, "w") {
-            Ok(inode) => Ok(inode),
-            Err(err) => {
-                error!("create failed: {:?}", err);
-                Err(FspError::IO(ErrorKind::Other))
-            }
-        }?;
+        let inode = if file_attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+            debug!("creating directory: {}", path);
+            self.fs.ext4_dir_mk(&path)
+        } else {
+            debug!("creating file: {}", path);
+            self.fs.ext4_file_open(&path, "w")
+        }
+        .map_err(|e| {
+            error!("create failed: {:?}", e);
+            FspError::IO(ErrorKind::Other)
+        })?;
+
         debug!("created file: {}", path);
 
         Ok(WinExtFile {
             file: file_name.to_string_lossy(),
-            inode: inode_num as u64,
+            inode: inode as u64,
         })
     }
 
@@ -152,44 +170,19 @@ impl FileSystemContext for WinExtContext {
     fn open(
         &self,
         file_name: &U16CStr,
-        _create_options: u32,
+        create_options: u32,
         _granted_access: u32,
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> Result<Self::FileContext> {
-        debug!("open: {:?}", file_name);
+        debug!("open: {:?}, create_options: {}", file_name, create_options);
 
         let path = file_name.sanitize();
         debug!("open path: {}", path);
 
-        let parent_path = Path::new(&path)
-            .parent()
-            .or_else(|| Some(Path::new("/")))
-            .unwrap()
-            .to_str()
-            .unwrap();
-        debug!("parent path: {}", parent_path);
-
-        let mut parent_inode = match self.fs.ext4_dir_open(parent_path) {
-            Ok(i) => Ok(i),
-            Err(e) => {
-                error!("open error (parent): {:?}", e);
-                Err(FspError::IO(ErrorKind::Other))
-            }
-        }?;
-
-        let inode_num = match self.fs.generic_open(
-            &path,
-            &mut parent_inode,
-            true,
-            InodeFileType::all().bits(),
-            &mut 0,
-        ) {
-            Ok(i) => Ok(i),
-            Err(e) => {
-                error!("open error: {:?}", e);
-                Err(FspError::IO(ErrorKind::Other))
-            }
-        }?;
+        let inode_num = self.fs.ext4_file_open(&path, "r").map_err(|e| {
+            error!("open error: {:?}", e);
+            FspError::IO(ErrorKind::NotFound)
+        })?;
 
         debug!("open inode: {:?}", inode_num);
         let inode = self.fs.get_inode_ref(inode_num);
@@ -206,16 +199,10 @@ impl FileSystemContext for WinExtContext {
         info.file_size = 0;
         info.allocation_size = 0;
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let windows_time = (now + 11644473600) * 10000000;
-
-        info.creation_time = windows_time;
-        info.last_access_time = windows_time;
-        info.last_write_time = windows_time;
-        info.change_time = windows_time;
+        info.creation_time = inode.inode.i_crtime().to_windows_time();
+        info.last_access_time = inode.inode.atime().to_windows_time();
+        info.last_write_time = inode.inode.mtime().to_windows_time();
+        info.change_time = inode.inode.ctime().to_windows_time();
 
         Ok(WinExtFile {
             file: path.clone(),
@@ -227,23 +214,26 @@ impl FileSystemContext for WinExtContext {
         debug!("close: {}", context.file);
     }
 
-    fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
+    fn get_file_info(&self, context: &Self::FileContext, info: &mut FileInfo) -> Result<()> {
         debug!("file info: {}", context.file);
 
         let inode = self.fs.get_inode_ref(context.inode as u32);
-        let file_type = inode_type_to_windows(inode.inode.file_type());
 
+        let inode_type = inode.inode.file_type();
+        info!("file info ext type: {:?}", inode_type);
+
+        let file_type = inode_type_to_windows(inode_type);
         info!("file info type: {:?}", file_type);
 
-        file_info.file_attributes = file_type.0;
-        file_info.reparse_tag = 0;
-        file_info.file_size = inode.inode.size();
-        file_info.allocation_size = ((inode.inode.size() + 4095) / 4096) * 4096;
+        info.file_attributes = file_type.0;
+        info.reparse_tag = 0;
+        info.file_size = inode.inode.size();
+        info.allocation_size = ((inode.inode.size() + 4095) / 4096) * 4096;
 
-        file_info.creation_time = inode.inode.i_crtime().to_windows_time();
-        file_info.last_access_time = inode.inode.atime().to_windows_time();
-        file_info.last_write_time = inode.inode.mtime().to_windows_time();
-        file_info.change_time = inode.inode.ctime().to_windows_time();
+        info.creation_time = inode.inode.i_crtime().to_windows_time();
+        info.last_access_time = inode.inode.atime().to_windows_time();
+        info.last_write_time = inode.inode.mtime().to_windows_time();
+        info.change_time = inode.inode.ctime().to_windows_time();
 
         Ok(())
     }

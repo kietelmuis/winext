@@ -1,13 +1,24 @@
 # winext
 
-a winfsp driver for ext4 filesystems
+A WinFsp driver for ext4 filesystems.
 
-# faq
+# Dependencies
 
-1. why not use wsl?
+- Rust
+- WinFsp
 
-    only has mount support for partitions not on the same drive as windows
+# How to Run
 
-2. why not use ext4fsd?
+```
+cargo run
+```
 
-    reading works fine, but writing is painfully slow
+# FAQ
+
+**Why not use WSL?**
+
+WSL2 only supports mounting partitions on different drives via `--mount`. Ext4 on the same drive as Windows isn't supported.
+
+**Why not use Ext4Fsd?**
+
+Reading works, but write performance is painfully slow due to the way it handles writes.

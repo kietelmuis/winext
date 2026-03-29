@@ -13,7 +13,8 @@ windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_Security",
     "Win32_System_IO",
-    "Win32_System_Ioctl"
+    "Win32_System_Ioctl",
+    "Wdk_Storage_FileSystem"
 ] }
 winfsp = { version = "0.12.4", features = ["debug", "system", "full", "windows-62", "handle-util"] }
 
