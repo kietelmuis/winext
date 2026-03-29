@@ -9,6 +9,7 @@ use crate::{
 
 mod disk;
 mod fs;
+mod util;
 
 fn main() {
     env_logger::Builder::new()

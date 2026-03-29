@@ -15,7 +15,8 @@ use winfsp::{
     host::{FileSystemHost, VolumeParams},
 };
 
-use crate::fs::file::WinExtFile;
+use crate::util::U32Ext;
+use crate::{fs::file::WinExtFile, util::U16CStrExt};
 
 pub struct WinExtFs {
     pub host: FileSystemHost<WinExtContext>,
@@ -101,11 +102,7 @@ impl FileSystemContext for WinExtContext {
     ) -> Result<Self::FileContext> {
         debug!("open: {:?}", file_name);
 
-        let path = file_name
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('\0')
-            .to_string();
+        let path = file_name.sanitize();
         debug!("path: {}", path);
 
         let inode = self
@@ -159,10 +156,10 @@ impl FileSystemContext for WinExtContext {
     fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> Result<()> {
         debug!("get_file_info: {}", &context.0);
 
-        let inode = self.fs.ext4_file_open(&context.0, "r").unwrap();
-        let inoderef = self.fs.get_inode_ref(inode);
+        let inode_num = self.fs.ext4_file_open(&context.0, "r").unwrap();
+        let inode = self.fs.get_inode_ref(inode_num);
 
-        let file_type = match inoderef.inode.file_type() {
+        let file_type = match inode.inode.file_type() {
             InodeFileType::S_IFREG => FILE_ATTRIBUTE_NORMAL,
             InodeFileType::S_IFDIR => FILE_ATTRIBUTE_DIRECTORY,
             t => {
@@ -179,19 +176,13 @@ impl FileSystemContext for WinExtContext {
 
         file_info.file_attributes = file_type;
         file_info.reparse_tag = 0;
-        file_info.file_size = 0;
-        file_info.allocation_size = 0;
+        file_info.file_size = inode.inode.size();
+        file_info.allocation_size = ((inode.inode.size() + 4095) / 4096) * 4096;
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let windows_time = (now + 11644473600) * 10000000;
-
-        file_info.creation_time = windows_time;
-        file_info.last_access_time = windows_time;
-        file_info.last_write_time = windows_time;
-        file_info.change_time = windows_time;
+        file_info.creation_time = inode.inode.i_crtime().to_windows_time();
+        file_info.last_access_time = inode.inode.atime().to_windows_time();
+        file_info.last_write_time = inode.inode.mtime().to_windows_time();
+        file_info.change_time = inode.inode.ctime().to_windows_time();
 
         Ok(())
     }
