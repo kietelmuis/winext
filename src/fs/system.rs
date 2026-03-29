@@ -212,7 +212,7 @@ impl FileSystemContext for WinExtContext {
     fn read_directory(
         &self,
         context: &Self::FileContext,
-        pattern: Option<&U16CStr>,
+        _pattern: Option<&U16CStr>,
         marker: DirMarker<'_>,
         buffer: &mut [u8],
     ) -> Result<u32> {
