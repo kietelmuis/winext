@@ -161,17 +161,34 @@ impl FileSystemContext for WinExtContext {
         let path = file_name.sanitize();
         debug!("open path: {}", path);
 
-        let inode_num =
-            match self
-                .fs
-                .generic_open(&path, &mut 2, true, InodeFileType::all().bits(), &mut 0)
-            {
-                Ok(i) => Ok(i),
-                Err(e) => {
-                    error!("open error: {:?}", e);
-                    Err(FspError::IO(ErrorKind::Other))
-                }
-            }?;
+        let parent_path = Path::new(&path)
+            .parent()
+            .or_else(|| Some(Path::new("/")))
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        let mut parent_inode = match self.fs.ext4_dir_open(parent_path) {
+            Ok(i) => Ok(i),
+            Err(e) => {
+                error!("open error (parent): {:?}", e);
+                Err(FspError::IO(ErrorKind::Other))
+            }
+        }?;
+
+        let inode_num = match self.fs.generic_open(
+            &path,
+            &mut parent_inode,
+            true,
+            InodeFileType::all().bits(),
+            &mut 0,
+        ) {
+            Ok(i) => Ok(i),
+            Err(e) => {
+                error!("open error: {:?}", e);
+                Err(FspError::IO(ErrorKind::Other))
+            }
+        }?;
 
         debug!("open inode: {:?}", inode_num);
         let inode = self.fs.get_inode_ref(inode_num);
