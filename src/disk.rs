@@ -43,10 +43,10 @@ impl DriveBlockDevice {
 
         assert!(!handle.is_invalid(), "handle is invalid");
 
-        let mut geo = DISK_GEOMETRY_EX::default();
+        let mut geo: Option<DISK_GEOMETRY_EX> = None;
         let mut bytes = 0u32;
         unsafe {
-            DeviceIoControl(
+            let _ = DeviceIoControl(
                 handle,
                 IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
                 None,
@@ -55,15 +55,29 @@ impl DriveBlockDevice {
                 size_of::<DISK_GEOMETRY_EX>() as u32,
                 Some(&mut bytes),
                 None,
-            )?;
+            );
         }
 
-        let sector_size = geo.Geometry.BytesPerSector;
-        let sector_count = geo.DiskSize as u64 / sector_size as u64;
+        let sector_size = match geo {
+            Some(geo) => geo.Geometry.BytesPerSector,
+            None => 512u32,
+        };
+        let sector_count = match geo {
+            Some(geo) => geo.DiskSize as u64 / sector_size as u64,
+            None => {
+                let mut disk_size = 0i64;
+                unsafe {
+                    GetFileSizeEx(handle, &mut disk_size)?;
+                }
+                disk_size as u64 / sector_size as u64
+            }
+        };
 
         info!(
-            "sector size: {}, sector count: {}",
-            sector_size, sector_count
+            "using {}; sector size: {}, sector count: {}",
+            if let Some(_) = geo { "disk" } else { "img" },
+            sector_size,
+            sector_count
         );
 
         let super_block = DriveBlockDevice::get_super_block(&handle);
