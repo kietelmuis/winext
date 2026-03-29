@@ -1,13 +1,14 @@
 use ext4_rs::{BlockDevice, Ext4, InodeFileType};
-use log::{debug, info};
+use log::{debug, error, info};
 use std::{
     ffi::c_void,
+    io::ErrorKind,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
 use winfsp::{
-    Result, U16CStr,
+    FspError, Result, U16CStr,
     filesystem::{
         DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo, VolumeInfo,
         WideNameInfo,
@@ -90,6 +91,20 @@ impl FileSystemContext for WinExtContext {
         _extra_buffer_is_reparse_point: bool,
         _file_info: &mut OpenFileInfo,
     ) -> Result<Self::FileContext> {
+        debug!("create: {:?}", file_name);
+
+        let path = file_name.sanitize();
+        debug!("create path: {}", path);
+
+        match self.fs.ext4_file_open(&path, "w") {
+            Ok(inode) => Ok(self.fs.get_inode_ref(inode)),
+            Err(err) => {
+                error!("create failed: {:?}", err);
+                Err(FspError::IO(ErrorKind::Other))
+            }
+        }?;
+        debug!("created file: {}", path);
+
         Ok(WinExtFile(file_name.to_string_lossy()))
     }
 
@@ -103,14 +118,14 @@ impl FileSystemContext for WinExtContext {
         debug!("open: {:?}", file_name);
 
         let path = file_name.sanitize();
-        debug!("path: {}", path);
+        debug!("open path: {}", path);
 
         let inode = self
             .fs
             .generic_open(&path, &mut 2, false, InodeFileType::all().bits(), &mut 0)
             .unwrap();
 
-        debug!("inode: {:?}", inode);
+        debug!("open inode: {:?}", inode);
 
         let inoderef = self.fs.get_inode_ref(inode);
 
@@ -121,13 +136,13 @@ impl FileSystemContext for WinExtContext {
                 if t.bits() == 0 {
                     FILE_ATTRIBUTE_DIRECTORY
                 } else {
-                    panic!("no support for file attribute {}", t.bits())
+                    panic!("no open support for file attribute {}", t.bits())
                 }
             }
         }
         .0;
 
-        info!("type: {:?}", file_type);
+        info!("open type: {:?}", file_type);
 
         let info = file_info.as_mut();
         info.file_attributes = file_type;
@@ -214,10 +229,8 @@ impl FileSystemContext for WinExtContext {
         debug!("read_directory");
 
         let dir = context.0.clone();
-        debug!("doing dir {}", dir);
-
         let inode = self.fs.ext4_file_open(&dir, "r").unwrap();
-        debug!("dir has inode {}", inode);
+        debug!("directory is on inode {}", inode);
 
         let mut directories = self.fs.dir_get_entries(inode);
         directories.sort_by(|a, b| a.get_name().cmp(&b.get_name()));
@@ -237,11 +250,11 @@ impl FileSystemContext for WinExtContext {
 
         for dir in directories.iter().skip(start_index) {
             let name = dir.get_name();
-            debug!("doing dir {}", name);
+            debug!("appending directory {}", name);
 
             let mut dirinfo: DirInfo<255> = DirInfo::new();
             if dirinfo.set_name(name.clone()).is_err() {
-                debug!("we were too stupid for dir {}", name);
+                debug!("failed to get name for directory {}", name);
                 continue;
             }
 
@@ -252,17 +265,17 @@ impl FileSystemContext for WinExtContext {
                 t => panic!("cannot handle de type {}", t),
             }
             .0;
-            debug!("dir {} has attributes {:x}", name, attributes);
+            debug!("directory {} has attributes {}", name, attributes);
 
             fileinfo.file_attributes = attributes;
 
             if !dirinfo.append_to_buffer(buffer, &mut bytes_transferred) {
                 break;
             }
-            debug!("appended dir {}", name);
+            debug!("appended directory {}", name);
         }
 
-        debug!("appended {} bytes", bytes_transferred);
+        debug!("transferred {} bytes", bytes_transferred);
         Ok(bytes_transferred)
     }
 }

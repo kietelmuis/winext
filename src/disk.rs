@@ -32,7 +32,7 @@ impl DriveBlockDevice {
         let handle = unsafe {
             CreateFileA(
                 PCSTR(path_cstr.as_ptr() as *const u8),
-                GENERIC_READ.0,
+                GENERIC_READ.0 | GENERIC_WRITE.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 None,
                 OPEN_EXISTING,
