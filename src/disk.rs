@@ -8,6 +8,7 @@ use ::windows::Win32::System::IO::*;
 use ::windows::Win32::System::Ioctl::*;
 use ::windows::core::*;
 use ext4_rs::BlockDevice;
+use log::debug;
 use log::info;
 
 pub struct DriveBlockDevice {
@@ -113,28 +114,34 @@ impl BlockDevice for DriveBlockDevice {
             }
         }
 
-        let mut buf = vec![0u8; self.super_block.block_size as usize];
+        let sector_size = 512usize;
+        let aligned_offset = (offset / sector_size) * sector_size;
+        let delta = offset - aligned_offset;
+        let read_size = ((delta + self.super_block.block_size as usize + sector_size - 1)
+            / sector_size)
+            * sector_size;
+
+        let mut buf = vec![0u8; read_size];
         let mut bytes_read = 0u32;
-        let mut overlapped = OVERLAPPED::default();
-        overlapped.Anonymous.Anonymous.Offset = (offset & 0xFFFF_FFFF) as u32;
-        overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+
+        debug!("reading offset={} aligned={}", offset, aligned_offset);
 
         unsafe {
-            SetFilePointerEx(self.handle, offset as i64, None, FILE_BEGIN)
+            SetFilePointerEx(self.handle, aligned_offset as i64, None, FILE_BEGIN)
                 .expect("failed to set file pointer");
-            ReadFile(
-                self.handle,
-                Some(&mut buf),
-                Some(&mut bytes_read),
-                Some(&mut overlapped),
-            )
-            .expect("failed to read file");
+            ReadFile(self.handle, Some(&mut buf), Some(&mut bytes_read), None)
+                .expect("failed to read file");
         }
-        println!("read_offset({}) first8={:02x?}", offset, &buf[..8]);
+        debug!(
+            "read_offset={}, bytes_read={}, first8={:02x?}",
+            offset,
+            bytes_read,
+            &buf[..8]
+        );
 
-        buf.truncate(bytes_read as usize);
-        self.cache.lock().unwrap().insert(offset, buf.clone());
-        buf
+        let result = buf[delta..delta + self.super_block.block_size as usize].to_vec();
+        self.cache.lock().unwrap().insert(offset, result.clone());
+        result
     }
 
     fn write_offset(&self, offset: usize, data: &[u8]) {
