@@ -33,10 +33,14 @@ impl WinExtFs {
         volume_params.sector_size(512);
         volume_params.sectors_per_allocation_unit(8);
         volume_params.max_component_length(255);
-        volume_params.filesystem_name("ext4");
+        volume_params.filesystem_name("NTFS");
         volume_params.volume_creation_time(windows_filetime);
         volume_params.volume_serial_number(0x6f910e5b);
-        volume_params.read_only_volume(true);
+        volume_params.read_only_volume(false);
+        volume_params.case_sensitive_search(false);
+        volume_params.case_preserved_names(true);
+        volume_params.unicode_on_disk(true);
+        volume_params.persistent_acls(true);
 
         WinExtFs {
             host: FileSystemHost::new(volume_params, context).expect("failed to create filesystem"),
@@ -224,25 +228,25 @@ impl FileSystemContext for WinExtContext {
         let inode = self.fs.ext4_file_open(&dir, "r").unwrap();
         debug!("dir has inode {}", inode);
 
-        let directories = self.fs.dir_get_entries(inode);
+        let mut directories = self.fs.dir_get_entries(inode);
+        directories.sort_by(|a, b| a.get_name().cmp(&b.get_name()));
+
+        let marker_name = marker.inner_as_cstr().map(|m| m.to_string_lossy());
         let mut bytes_transferred: u32 = 0;
 
-        let mut marker_passed = marker.is_none();
-        let marker_name = match marker.inner_as_cstr() {
-            Some(m) => Some(m.to_string_lossy()),
-            None => None,
+        let start_index = if let Some(ref m) = marker_name {
+            directories
+                .iter()
+                .position(|d| d.get_name() == *m)
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
         };
 
-        for dir in directories {
+        for dir in directories.iter().skip(start_index) {
             let name = dir.get_name();
             debug!("doing dir {}", name);
-
-            if !marker_passed {
-                if marker_name == Some(name) {
-                    marker_passed = true;
-                }
-                continue;
-            }
 
             let mut dirinfo: DirInfo<255> = DirInfo::new();
             if dirinfo.set_name(name.clone()).is_err() {
@@ -252,8 +256,7 @@ impl FileSystemContext for WinExtContext {
 
             let fileinfo = dirinfo.file_info_mut();
             let attributes = match dir.get_de_type() {
-                1 => FILE_ATTRIBUTE_NORMAL,
-                7 => FILE_ATTRIBUTE_NORMAL,
+                1 | 7 => FILE_ATTRIBUTE_NORMAL,
                 2 => FILE_ATTRIBUTE_DIRECTORY,
                 t => panic!("cannot handle de type {}", t),
             }
@@ -262,7 +265,9 @@ impl FileSystemContext for WinExtContext {
 
             fileinfo.file_attributes = attributes;
 
-            dirinfo.append_to_buffer(buffer, &mut bytes_transferred);
+            if !dirinfo.append_to_buffer(buffer, &mut bytes_transferred) {
+                break;
+            }
             debug!("appended dir {}", name);
         }
 
