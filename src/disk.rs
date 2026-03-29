@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::ffi::CString;
-use std::sync::Mutex;
 
 use ::windows::Win32::Foundation::*;
 use ::windows::Win32::Storage::FileSystem::*;
@@ -14,7 +12,6 @@ use log::info;
 pub struct DriveBlockDevice {
     handle: HANDLE,
     super_block: DiskSuperBlock,
-    cache: Mutex<HashMap<usize, Vec<u8>>>,
 }
 
 #[derive(Debug)]
@@ -89,7 +86,6 @@ impl DriveBlockDevice {
         Ok(Self {
             handle,
             super_block,
-            cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -121,13 +117,6 @@ impl DriveBlockDevice {
 
 impl BlockDevice for DriveBlockDevice {
     fn read_offset(&self, offset: usize) -> Vec<u8> {
-        {
-            let cache = self.cache.lock().unwrap();
-            if let Some(cached) = cache.get(&offset) {
-                return cached.clone();
-            }
-        }
-
         let sector_size = 512usize;
         let aligned_offset = (offset / sector_size) * sector_size;
         let delta = offset - aligned_offset;
@@ -154,12 +143,13 @@ impl BlockDevice for DriveBlockDevice {
         );
 
         let result = buf[delta..delta + self.super_block.block_size as usize].to_vec();
-        self.cache.lock().unwrap().insert(offset, result.clone());
         result
     }
 
     fn write_offset(&self, offset: usize, data: &[u8]) {
         let mut bytes_written = 0u32;
+
+        debug!("reading offset={}", offset);
 
         unsafe {
             SetFilePointerEx(self.handle, offset as i64, None, FILE_BEGIN).unwrap();
