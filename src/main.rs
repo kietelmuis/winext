@@ -1,38 +1,59 @@
-use std::fs::exists;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
-use crc32_v2::crc32;
-use ext4_lwext4::{FileBlockDevice, MkfsOptions, mkfs};
-use log::info;
+use log::{error, info};
 
-use crate::fs::system::{WinExtContext, WinExtFs};
+use crate::{
+    disk::DriveBlockDevice,
+    fs::system::{WinExtContext, WinExtFs},
+};
 
+mod disk;
 mod fs;
-
-const CRC32_INIT: u32 = 0;
+mod util;
 
 fn main() {
     env_logger::Builder::new()
         .filter_module("winext", log::LevelFilter::Debug)
         .init();
 
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
     info!("initializing");
 
-    if !exists("disk.img").unwrap() {
-        let device = FileBlockDevice::create("disk.img", 1000 * 1024 * 1024).unwrap();
-        mkfs(device, &MkfsOptions::default()).unwrap();
-    }
-
-    let data = std::fs::read("disk.img").unwrap();
-
-    let device = FileBlockDevice::open("disk.img").unwrap();
+    let device = match DriveBlockDevice::open("C:\\Users\\omar\\test.img") {
+        Ok(dev) => Arc::new(dev),
+        Err(e) => {
+            error!("failed to open device: {:?}", e);
+            return;
+        }
+    };
     let context = WinExtContext::new(device);
 
-    let mut host = WinExtFs::new(context, crc32(CRC32_INIT, &data) as u32);
-    host.host.mount("Z:").unwrap();
-    info!("mounting");
+    info!("mounting...");
+    let mut host = WinExtFs::new(context);
+    match host.host.mount("Z:") {
+        Ok(_) => info!("mounted!"),
+        Err(e) => error!("mount failed: {:?}", e),
+    }
 
-    host.host.start().unwrap();
-    info!("starting");
+    info!("starting...");
+    match host.host.start() {
+        Ok(_) => info!("started!"),
+        Err(e) => error!("start failed: {:?}", e),
+    }
 
-    loop {}
+    ctrlc::set_handler(move || {
+        info!("shutting down...");
+        host.host.unmount();
+        host.host.stop();
+
+        r.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
+
+    while running.load(Ordering::SeqCst) {}
 }
