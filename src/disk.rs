@@ -135,12 +135,6 @@ impl BlockDevice for DriveBlockDevice {
             ReadFile(self.handle, Some(&mut buf), Some(&mut bytes_read), None)
                 .expect("failed to read file");
         }
-        debug!(
-            "read_offset={}, bytes_read={}, first8={:02x?}",
-            offset,
-            bytes_read,
-            &buf[..8]
-        );
 
         let result = buf[delta..delta + self.super_block.block_size as usize].to_vec();
         result
@@ -149,7 +143,7 @@ impl BlockDevice for DriveBlockDevice {
     fn write_offset(&self, offset: usize, data: &[u8]) {
         let mut bytes_written = 0u32;
 
-        debug!("reading offset={}", offset);
+        debug!("writing offset={}", offset);
 
         unsafe {
             SetFilePointerEx(self.handle, offset as i64, None, FILE_BEGIN).unwrap();

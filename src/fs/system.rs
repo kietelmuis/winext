@@ -9,6 +9,7 @@ use std::{
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
 use winfsp::{
     FspError, Result, U16CStr,
+    constants::FspCleanupFlags,
     filesystem::{
         DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo, VolumeInfo,
         WideNameInfo,
@@ -16,8 +17,8 @@ use winfsp::{
     host::{FileSystemHost, VolumeParams},
 };
 
+use crate::fs::file::WinExtFile;
 use crate::util::{inode::inode_type_to_windows, u16cstr::U16CStrExt, u32::U32Ext};
-use crate::{fs::file::WinExtFile, util::inode::windows_to_inode_type};
 
 pub struct WinExtFs {
     pub host: FileSystemHost<WinExtContext>,
@@ -89,6 +90,24 @@ impl FileSystemContext for WinExtContext {
         })
     }
 
+    fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
+        debug!("cleanup called: file={}, flags=0x{:x}", context.file, flags);
+
+        if !FspCleanupFlags::FspCleanupDelete.is_flagged(flags) {
+            debug!("cleanup without delete flag: file={}", context.file);
+            return;
+        }
+
+        let inode = self.fs.get_inode_ref(context.inode as u32);
+        if inode.inode.file_type() == InodeFileType::S_IFDIR {
+            debug!("cleanup: dir_remove: {}", context.file);
+            self.fs.dir_remove(2, &context.file).unwrap();
+        } else {
+            debug!("cleanup: file_remove: {}", context.file);
+            self.fs.file_remove(&context.file).unwrap();
+        }
+    }
+
     fn create(
         &self,
         file_name: &U16CStr,
@@ -110,7 +129,7 @@ impl FileSystemContext for WinExtContext {
         let path = file_name.sanitize();
         debug!("create path: {}", path);
 
-        let inode = if file_attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+        let inode_num = if file_attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
             debug!("creating directory: {}", path);
             self.fs.ext4_dir_mk(&path)
         } else {
@@ -122,11 +141,23 @@ impl FileSystemContext for WinExtContext {
             FspError::IO(ErrorKind::Other)
         })?;
 
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+
+        let mut inode = self.fs.get_inode_ref(inode_num);
+        inode.inode.set_atime(now);
+        inode.inode.set_ctime(now);
+        inode.inode.set_mtime(now);
+        inode.inode.set_i_crtime(now);
+        self.fs.write_back_inode(&mut inode);
+
         debug!("created file: {}", path);
 
         Ok(WinExtFile {
-            file: file_name.to_string_lossy(),
-            inode: inode as u64,
+            file: path,
+            inode: inode_num as u64,
         })
     }
 
